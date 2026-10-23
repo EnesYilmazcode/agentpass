@@ -7,12 +7,22 @@ import re
 from urllib.parse import quote_plus
 
 from mcp.server.mcpserver import MCPServer
+from mcp_types import ToolAnnotations
+from patchright.async_api import TimeoutError as PatchrightTimeoutError
 
 from .browser import launch
 from .heal import guard
 
 
-server = MCPServer("agentpass")
+server = MCPServer(
+    "agentpass",
+    version="0.2.0",
+    instructions=(
+        "Use search before add_to_cart so the user can choose an exact product. "
+        "Treat add_to_cart and checkout as write actions requiring confirmation. "
+        "checkout only prepares Amazon's final review page and never places an order."
+    ),
+)
 
 
 def _money(raw: str) -> float | None:
@@ -39,6 +49,16 @@ async def _search(query: str) -> list[dict]:
 
         results: list[dict] = []
         cards = page.locator('div[data-component-type="s-search-result"][data-asin]')
+        try:
+            await cards.first.wait_for(state="attached", timeout=10_000)
+        except PatchrightTimeoutError:
+            # A second guard captures late-rendered challenge pages and gives the
+            # caller a useful MCP error instead of a misleading empty catalog.
+            await guard(page)
+            raise RuntimeError(
+                "Amazon did not return search results. Inspect block.png, wait, "
+                "and retry with the signed-in Agentpass profile."
+            )
         for index in range(min(await cards.count(), 12)):
             card = cards.nth(index)
             asin = (await card.get_attribute("data-asin") or "").strip()
@@ -56,17 +76,33 @@ async def _search(query: str) -> list[dict]:
         await context.close()
 
 
-@server.tool()
+@server.tool(
+    title="Search Amazon products",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
 async def search(query: str) -> list[dict]:
-    """Search Amazon and return product title, ASIN, and displayed price."""
+    """Use this to find Amazon products before choosing one to add to the cart."""
     if not query.strip():
         raise ValueError("query cannot be empty")
     return await _search(query.strip())
 
 
-@server.tool()
+@server.tool(
+    title="Add an Amazon product to cart",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 async def add_to_cart(asin: str, qty: int = 1) -> dict:
-    """Add a product to the signed-in user's cart."""
+    """Use this only after the user chooses an exact ASIN and quantity."""
     normalized = _valid_asin(asin)
     if not 1 <= qty <= 30:
         raise ValueError("qty must be between 1 and 30")
@@ -95,7 +131,15 @@ async def add_to_cart(asin: str, qty: int = 1) -> dict:
         await context.close()
 
 
-@server.tool()
+@server.tool(
+    title="Prepare Amazon checkout",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 async def checkout(confirm_under: float) -> dict:
     """Open checkout when the cart subtotal is under a caller-provided ceiling.
 
@@ -156,4 +200,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

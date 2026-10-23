@@ -22,3 +22,8 @@ async def test_mcp_exposes_expected_tools() -> None:
     tools = await server.list_tools()
     assert {tool.name for tool in tools} == {"search", "add_to_cart", "checkout"}
 
+    by_name = {tool.name: tool for tool in tools}
+    assert by_name["search"].annotations.read_only_hint is True
+    assert by_name["search"].annotations.open_world_hint is True
+    assert by_name["add_to_cart"].annotations.read_only_hint is False
+    assert by_name["checkout"].annotations.read_only_hint is False

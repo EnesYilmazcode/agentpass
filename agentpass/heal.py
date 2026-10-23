@@ -10,6 +10,7 @@ BLOCK_MARKERS: list[str] = [
     "unauthorized AI agent",
     "Conditions of Use",
     "Robot or human?",
+    "Sorry! Something went wrong!",
 ]
 
 
@@ -35,4 +36,3 @@ async def guard(page: GuardedPage) -> bool:
     await page.reload(wait_until="domcontentloaded")
     await page.wait_for_timeout(2_000)
     return True
-
