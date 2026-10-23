@@ -1,146 +1,240 @@
 # agentpass
 
-> A passport for AI agents on the open web.
+> Shop the web with your personal AI agent and your own browser.
 
-Your agent opens Chrome. The site sees Chrome. The JavaScript runtime agrees.
-Then the agent can identify itself on its own terms.
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB)](https://www.python.org/)
+[![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-That sounds obvious. It is not.
+Agentpass is an open-source browser runtime for personal shopping agents. It
+gives an agent a real, headed Chrome session with a persistent local profile,
+then exposes a small set of shopping actions over MCP.
 
-Setting request headers alone leaves a split identity: the network says Chrome
-while `navigator.userAgentData` can say something else. Agentpass keeps the HTTP
-headers and browser Client Hints aligned through Chrome DevTools Protocol, using
-your local Chrome and a persistent profile.
+The goal is simple:
 
-No proxy fleet. No remote browser. One small Python harness.
+> “Use Agentpass to find roasted chestnuts under $20, show me the best three,
+> and add the one I choose to my Amazon cart.”
 
-## What ships
+Your login stays in your Chrome profile. The agent gets structured tools. Cart
+and checkout actions stay visible and confirmation-gated.
 
-- A headed, persistent Patchright + Chrome context.
-- Coherent Chrome headers and `navigator.userAgentData` brands.
-- Local profile reuse via `AGENTPASS_PROFILE`.
-- Bézier mouse movement, variable typing cadence, and eased scrolling.
-- Challenge detection with a local `block.png` diagnostic.
-- MCP tools for product search, cart updates, and checkout preparation.
-- A hard stop before final order placement.
+## Why Agentpass
 
-## Start
+Browser agents often fail on shopping sites for reasons that have little to do
+with reasoning. A site can receive one browser identity in HTTP headers and a
+different identity from JavaScript Client Hints. Fresh disposable profiles also
+lose the account session, delivery location, cart, and preferences that make a
+personal shopping workflow useful.
 
-```bash
-git clone <your-repo-url> agentpass
-cd agentpass
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -e ".[test]"
-pytest -v
+Agentpass solves the browser-runtime layer:
+
+- Runs the user's installed Chrome in headed mode.
+- Reuses a local profile instead of a disposable browser.
+- Keeps HTTP Chrome headers and `navigator.userAgentData` consistent.
+- Detects challenge and error pages and saves a diagnostic screenshot.
+- Exposes focused MCP tools instead of giving the model arbitrary browser
+  access.
+- Stops before final order placement in the current release.
+
+## How it works
+
+```mermaid
+flowchart LR
+    user[Shopper] -->|Natural-language request| agent[Personal AI agent]
+    agent -->|MCP tool call| server[Agentpass MCP server]
+    server -->|Patchright and CDP| chrome[Local headed Chrome]
+    chrome -->|Existing account session| amazon[Amazon]
+    amazon -->|Products, cart, checkout| chrome
+    chrome -->|Structured result| server
+    server -->|Result| agent
+    agent -->|Choices and confirmations| user
 ```
 
-Run the MCP server over stdio:
+Agentpass currently exposes three tools:
+
+| Tool | What it does | Changes state |
+| --- | --- | --- |
+| `search(query)` | Returns product title, ASIN, and displayed price. | No |
+| `add_to_cart(asin, qty)` | Adds an exact product and quantity to the cart. | Yes |
+| `checkout(confirm_under)` | Opens checkout only when the subtotal is below the supplied ceiling. | Yes |
+
+## Shopping flow
+
+```mermaid
+sequenceDiagram
+    participant Shopper
+    participant Agent
+    participant Agentpass
+    participant Amazon
+
+    Shopper->>Agent: Find roasted chestnuts under $20
+    Agent->>Agentpass: search query
+    Agentpass->>Amazon: Search in local Chrome
+    Amazon-->>Agentpass: Product results
+    Agentpass-->>Agent: Titles, ASINs, prices
+    Agent-->>Shopper: Show the best choices
+    Shopper->>Agent: Choose one product
+    Agent->>Agentpass: add_to_cart with ASIN and quantity
+    Agentpass->>Amazon: Add selected product
+    Amazon-->>Agentpass: Cart updated
+    Agentpass-->>Agent: Added
+    Shopper->>Agent: Prepare checkout under spending limit
+    Agent->>Agentpass: checkout with limit
+    Agentpass->>Amazon: Open checkout review
+    Agentpass-->>Shopper: Ready for final human review
+```
+
+## The intended user experience
+
+The project is moving toward a packaged desktop plugin:
+
+```mermaid
+flowchart LR
+    install[Install Agentpass plugin once] --> login[Sign in to Amazon in Chrome]
+    login --> ask[Ask a personal agent to shop]
+    ask --> choose[Choose a product]
+    choose --> approve[Approve cart or checkout action]
+    approve --> done[Review in Amazon]
+```
+
+For the end user, that means no Python setup, terminal commands, API keys,
+public server, or manually configured tunnel. The local MCP runtime ships with
+the desktop plugin and runs on the user's machine, where it can use that user's
+Chrome profile.
+
+The repository is currently the working Python prototype. Packaging the runtime
+as a self-contained desktop plugin is the next distribution milestone.
+
+## Install for development
+
+Requirements:
+
+- Python 3.11 or newer
+- Google Chrome
+- Windows, macOS, or Linux desktop session
+
+```bash
+git clone https://github.com/EnesYilmazcode/agentpass.git
+cd agentpass
+python -m venv .venv
+```
+
+Activate the environment:
+
+```bash
+# macOS or Linux
+source .venv/bin/activate
+
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+```
+
+Install Agentpass and its tests:
+
+```bash
+pip install -e ".[test]"
+```
+
+## Sign in once
+
+```bash
+agentpass-login
+```
+
+Agentpass opens its persistent Chrome profile. Sign in to Amazon directly in
+that window, then return to the terminal and press Enter. Agentpass never asks
+for or receives your Amazon password.
+
+The default profile lives in `.profile/` and is excluded from Git. Choose a
+different location with `AGENTPASS_PROFILE`:
+
+```powershell
+$env:AGENTPASS_PROFILE = "C:\path\to\agentpass-profile"
+```
+
+## Run the MCP server
 
 ```bash
 agentpass
 ```
 
-Sign in once using the dedicated local profile. Agentpass never receives or
-stores your password; authentication happens in the Chrome window:
+The server uses stdio transport and advertises accurate MCP safety annotations:
 
-```powershell
-agentpass-login
-```
+- `search` is read-only and open-world.
+- `add_to_cart` and `checkout` are write actions.
+- `checkout` prepares the Amazon review page but does not place the order.
 
-Choose a reusable Chrome profile:
-
-```bash
-export AGENTPASS_PROFILE="$PWD/.profile"
-```
-
-PowerShell:
-
-```powershell
-$env:AGENTPASS_PROFILE = "$PWD\.profile"
-```
-
-## The proof
-
-The test that matters checks the JavaScript surface, not just request headers:
-
-```python
-brands = await page.evaluate(
-    "() => navigator.userAgentData.brands.map(b => b.brand).join(',')"
-)
-assert "HeadlessChrome" not in brands
-assert "Chrome" in brands
-```
-
-Run the live fingerprint checks:
-
-```bash
-pytest -v tests/test_fingerprint_live.py tests/test_headers_live.py
-```
-
-The Amazon search smoke test is opt-in because it touches a live storefront:
-
-```bash
-AGENTPASS_RUN_AMAZON=1 pytest -v tests/test_amazon_live.py
-```
-
-## API
+## Use the browser harness directly
 
 ```python
 from agentpass.browser import launch
 
 context = await launch()
 page = context.pages[0]
-await page.goto("https://example.com")
-# use the page
+await page.goto("https://www.amazon.com")
+
+# Work with the signed-in local browser.
+
 await context.close()
 ```
 
-Three MCP tools sit on top: `search(query)`, `add_to_cart(asin, qty)`, and
-`checkout(confirm_under)`. Each owns its browser lifecycle. Checkout validates
-the cart subtotal and opens the review flow, but never places the order.
+## The Client Hints fix
 
-## Connect to ChatGPT privately
+Changing request headers alone does not update JavaScript's view of the browser.
+Agentpass applies a CDP `Network.setUserAgentOverride` with a complete
+`userAgentMetadata` payload:
 
-Agentpass supports OpenAI's Secure MCP Tunnel over its stdio transport. The
-tunnel is outbound-only, so the browser profile and MCP server remain on your
-computer.
+```python
+brands = await page.evaluate(
+    "() => navigator.userAgentData.brands.map(b => b.brand).join(',')"
+)
 
-Prerequisites:
-
-1. In OpenAI Platform, create a tunnel associated with your personal Platform
-   organization and target ChatGPT workspace.
-2. Create a restricted runtime API key whose principal has **Tunnels Read +
-   Use**. Do not use an admin key for the running client.
-3. Install OpenAI's current `tunnel-client` at
-   `%LOCALAPPDATA%\agentpass\bin\tunnel-client.exe`.
-
-Configure the local profile without writing the API key into the repository:
-
-```powershell
-.\scripts\setup-tunnel.ps1 -TunnelId "tunnel_REPLACE_ME"
-.\scripts\run-tunnel.ps1
+assert "HeadlessChrome" not in brands
+assert "Chrome" in brands
 ```
 
-Both scripts prompt for the runtime key without echoing it and keep it only in
-the current process environment.
+## Tests
 
-Keep that PowerShell window running. In ChatGPT on the web, open **Plugins**,
-select **Add custom MCP server**, choose **Tunnel**, select the same tunnel,
-create the private plugin, and install it. Leave confirmation enabled for
-`add_to_cart` and `checkout`; `search` is advertised as read-only.
+Run the standard suite:
 
-Try this prompt:
+```bash
+pytest -v
+```
 
-> Use Agentpass to find three well-reviewed bags of roasted chestnuts under
-> $20. Show me the choices. After I choose one, add one bag to my cart and
-> prepare checkout, but do not place the order.
+The suite includes offline unit tests and live checks against neutral browser
+fingerprint endpoints. The Amazon smoke test is opt-in because it touches a live
+storefront and can be rate-limited:
 
-## Why now
+```powershell
+$env:AGENTPASS_RUN_AMAZON = "1"
+pytest -v tests\test_amazon_live.py
+```
 
-The open web needs a cleaner contract for agents: behave like a browser at the
-transport layer, identify as an agent at the protocol layer, and let sites make
-an informed decision. Agentpass is the local, inspectable harness for that
-contract.
+## Roadmap
 
-MIT licensed. Bring your own Chrome.
+- [x] Persistent headed Chrome context
+- [x] Consistent HTTP and JavaScript Chrome identity
+- [x] Product search, add-to-cart, and checkout-preparation tools
+- [x] MCP read/write annotations and spending ceiling
+- [x] Challenge diagnostics and live fingerprint tests
+- [ ] Package a self-contained local runtime for desktop plugin installation
+- [ ] Add a product-comparison and confirmation UI
+- [ ] Add account, cart-inspection, seller, delivery, and variant tools
+- [ ] Add serialized access to the persistent browser profile
+- [ ] Evaluate standards-based agent identification separately from browser
+      compatibility
+- [ ] Design final order placement with a fresh total, exact cart snapshot,
+      explicit approval, and duplicate-order protection
+
+## Scope and safety
+
+Agentpass is designed for a shopper operating their own account and browser.
+Write actions should remain confirmation-gated. The current release intentionally
+does not click Amazon's final order button.
+
+Agentpass is not affiliated with or endorsed by Amazon. Storefront markup and
+behavior can change, and live automation may encounter account checks, regional
+differences, or temporary rate limits.
+
+## License
+
+[MIT](LICENSE)
